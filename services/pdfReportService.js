@@ -77,6 +77,29 @@ function generateReportPdf(resume) {
       align: 'left',
     });
 
+    addSectionTitle(doc, 'Recommended Jobs');
+    const jobs = resume.jobRecommendations?.jobs || [];
+    if (!jobs.length) {
+      doc.text('No job recommendations available.');
+    } else {
+      jobs.forEach((job, index) => {
+        doc.font('Helvetica-Bold').text(`${index + 1}. ${job.title}`);
+        doc.font('Helvetica-Bold').fillColor('#3f4bd8');
+        doc.text(`Job Code: ${sanitizeText(job.jobCode) || 'N/A'}`);
+        doc.text(`Company: ${sanitizeText(job.company) || 'N/A'}`);
+        doc.text(`Source: ${sanitizeText(job.source) || 'N/A'}`);
+        if (job.jobUrl) {
+          doc.text(`Apply: ${sanitizeText(job.jobUrl)}`);
+        }
+        doc.fillColor('#000000').font('Helvetica');
+        doc.text(`Location: ${job.location || 'N/A'}`);
+        doc.text(`Match score: ${job.matchScore ?? 'N/A'}%`);
+        doc.text(`Required skills: ${(job.requiredSkills || []).join(', ') || 'N/A'}`);
+        doc.text(`Why recommended: ${job.reason || 'N/A'}`);
+        doc.moveDown(0.5);
+      });
+    }
+
     addSectionTitle(doc, 'Recommended Courses');
     const courses = resume.courseRecommendations?.courses || [];
     if (!courses.length) {

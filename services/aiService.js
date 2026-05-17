@@ -165,8 +165,67 @@ ${(resumeDoc.resumeText || '').slice(0, 2000)}
   return parseJsonFromAI(content);
 }
 
+async function generateJobRecommendations(resumeDoc) {
+  const skills = [
+    ...(resumeDoc.skills?.technical || []),
+    ...(resumeDoc.skills?.soft || []),
+    ...(resumeDoc.skills?.tools || []),
+  ].join(', ');
+  const strengths = (resumeDoc.strengths || []).map((s) => `- ${s}`).join('\n');
+  const weaknesses = (resumeDoc.weaknesses || []).map((w) => `- ${w}`).join('\n');
+
+  const prompt = `
+You are an expert tech career advisor and recruiter.
+
+Based on the resume profile below, recommend exactly 5 realistic job roles the candidate should apply for.
+Match seniority and skills to the resume. Prefer software engineering and tech roles.
+
+Return ONLY valid JSON in this format (no markdown):
+
+{
+  "jobs": [
+    {
+      "title": "Job Title",
+      "jobCode": "REQ-12345 or SWE-2024-001 style requisition code",
+      "company": "Realistic company name e.g. Stripe, Infosys, Google",
+      "location": "Remote | Hybrid | City",
+      "matchScore": 85,
+      "reason": "Why this role fits the candidate",
+      "requiredSkills": ["skill1", "skill2"]
+    }
+  ]
+}
+
+Rules:
+- jobCode must be a unique realistic requisition ID (e.g. REQ-SWE-4821, JOB-ENG-1092)
+- company must be a specific recognizable company or realistic employer name
+- matchScore is 0-100 based on resume fit
+- requiredSkills must be deduplicated (max 6 per job)
+- jobs must be realistic for the candidate's experience level
+- vary company types and work modes
+
+Strengths:
+${strengths || 'None listed'}
+
+Weaknesses:
+${weaknesses || 'None listed'}
+
+Current skills:
+${skills || 'None listed'}
+
+ATS score: ${resumeDoc.atsScore ?? 'N/A'}
+
+Resume excerpt:
+${(resumeDoc.resumeText || '').slice(0, 2000)}
+`;
+
+  const content = await callHuggingFaceChat(prompt, 2048);
+  return parseJsonFromAI(content);
+}
+
 module.exports = {
   analyzeResumeWithAI,
   generateResumeInsights,
   generateCourseRecommendations,
+  generateJobRecommendations,
 };

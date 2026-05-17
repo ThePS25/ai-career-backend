@@ -1,5 +1,6 @@
 const Resume = require('../models/Resume');
 const { ensureCourseRecommendations } = require('../services/courseService');
+const { ensureJobRecommendations } = require('../services/jobService');
 const { generateReportPdf } = require('../services/pdfReportService');
 
 exports.downloadReport = async (req, res) => {
@@ -13,7 +14,10 @@ exports.downloadReport = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Resume not found' });
     }
 
-    await ensureCourseRecommendations(resume);
+    await Promise.all([
+      ensureCourseRecommendations(resume),
+      ensureJobRecommendations(resume),
+    ]);
 
     const pdfBuffer = await generateReportPdf(resume);
 

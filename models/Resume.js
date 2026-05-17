@@ -46,6 +46,22 @@ const resumeSchema = new mongoose.Schema(
         },
       ],
     },
+
+    jobRecommendations: {
+      jobs: [
+        {
+          title: String,
+          jobCode: String,
+          company: String,
+          location: String,
+          matchScore: Number,
+          reason: String,
+          requiredSkills: [String],
+          source: String,
+          jobUrl: String,
+        },
+      ],
+    },
   },
   { timestamps: true }
 );

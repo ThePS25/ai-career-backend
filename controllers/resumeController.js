@@ -4,7 +4,9 @@ const { extractTextFromPDF } = require('../services/pdfService');
 const {
   analyzeResumeWithAI,
   generateResumeInsights,
+  generateCourseRecommendations,
 } = require('../services/aiService');
+const { buildJobRecommendations } = require('../services/jobService');
 const { nodeEnv } = require('../config/env');
 
 exports.uploadResume = async (req, res) => {
@@ -42,6 +44,15 @@ exports.uploadResume = async (req, res) => {
       improvements: resumeInsights.improvements,
     });
 
+    const [courseRecommendations, jobRecommendations] = await Promise.all([
+      generateCourseRecommendations(resumeDoc),
+      buildJobRecommendations(resumeDoc),
+    ]);
+
+    resumeDoc.courseRecommendations = courseRecommendations;
+    resumeDoc.jobRecommendations = jobRecommendations;
+    await resumeDoc.save();
+
     res.json({ success: true, data: resumeDoc });
   } catch (err) {
     console.error('Resume upload error:', err.response?.data || err.message);
@@ -67,7 +78,7 @@ exports.getMyResumes = async (req, res) => {
     const resumes = await Resume.find({ user: userId })
       .sort({ createdAt: -1 })
       .select(
-        '_id fileName createdAt atsScore sections skills strengths weaknesses improvements courseRecommendations'
+        '_id fileName createdAt atsScore sections skills strengths weaknesses improvements courseRecommendations jobRecommendations'
       )
       .lean();
 
@@ -82,6 +93,7 @@ exports.getMyResumes = async (req, res) => {
       weaknesses: resume.weaknesses ?? [],
       improvements: resume.improvements ?? null,
       courseRecommendations: resume.courseRecommendations?.courses ?? [],
+      jobRecommendations: resume.jobRecommendations?.jobs ?? [],
     }));
 
     res.json({ success: true, count: data.length, data });
@@ -109,6 +121,17 @@ exports.reanalyzeResume = async (req, res) => {
     resume.strengths = insights.strengths;
     resume.weaknesses = insights.weaknesses;
     resume.improvements = insights.improvements;
+    resume.courseRecommendations = undefined;
+    resume.jobRecommendations = undefined;
+    await resume.save();
+
+    const [courseRecommendations, jobRecommendations] = await Promise.all([
+      generateCourseRecommendations(resume),
+      buildJobRecommendations(resume),
+    ]);
+
+    resume.courseRecommendations = courseRecommendations;
+    resume.jobRecommendations = jobRecommendations;
     await resume.save();
 
     res.json({ success: true, data: resume });
