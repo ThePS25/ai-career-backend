@@ -20,5 +20,10 @@ module.exports = {
     secret: process.env.JWT_SECRET,
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
+  hfApiKey: process.env.HF_API_KEY,
+  hfChatUrl:
+    process.env.HF_CHAT_URL ||
+    'https://router.huggingface.co/v1/chat/completions',
+  hfModel: process.env.HF_MODEL || 'google/gemma-4-31B-it',
   validateEnv,
 };
