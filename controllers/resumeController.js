@@ -1,6 +1,9 @@
 const Resume = require('../models/Resume');
 const { extractTextFromPDF } = require('../services/pdfService');
-const { analyzeResumeWithAI } = require('../services/aiService');
+const {
+  analyzeResumeWithAI,
+  generateResumeInsights,
+} = require('../services/aiService');
 const { nodeEnv } = require('../config/env');
 
 exports.uploadResume = async (req, res) => {
@@ -22,12 +25,20 @@ exports.uploadResume = async (req, res) => {
     }
 
     const aiAnalysis = await analyzeResumeWithAI(text);
+    const resumeInsights = await generateResumeInsights(text);
 
     const resumeDoc = await Resume.create({
       user: req.user._id,
       fileName: req.file.originalname,
       resumeText: text,
       aiAnalysis,
+
+      atsScore: resumeInsights.atsScore,
+      sections: resumeInsights.sections,
+      skills: resumeInsights.skills,
+      strengths: resumeInsights.strengths,
+      weaknesses: resumeInsights.weaknesses,
+      improvements: resumeInsights.improvements,
     });
 
     res.json({ success: true, data: resumeDoc });
@@ -45,5 +56,32 @@ exports.uploadResume = async (req, res) => {
       message,
       ...(nodeEnv === 'development' && { detail: err.response?.data }),
     });
+  }
+};
+
+exports.reanalyzeResume = async (req, res) => {
+  try {
+    const resume = await Resume.findOne({
+      _id: req.params.id,
+      user: req.user._id,
+    });
+    if (!resume) {
+      return res.status(404).json({ success: false, message: 'Resume not found' });
+    }
+
+    const insights = await generateResumeInsights(resume.resumeText);
+
+    resume.atsScore = insights.atsScore;
+    resume.sections = insights.sections;
+    resume.skills = insights.skills;
+    resume.strengths = insights.strengths;
+    resume.weaknesses = insights.weaknesses;
+    resume.improvements = insights.improvements;
+    await resume.save();
+
+    res.json({ success: true, data: resume });
+  } catch (err) {
+    console.error('Resume reanalysis error:', err.message);
+    res.status(500).json({ success: false, message: 'Reanalysis failed' });
   }
 };
