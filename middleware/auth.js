@@ -5,14 +5,20 @@ async function protect(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
 
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized — no token provided',
-      });
+    let token = null;
+    if (authHeader?.startsWith('Bearer ')) {
+      token = authHeader.slice(7).trim();
+    } else if (authHeader?.trim()) {
+      token = authHeader.trim();
     }
 
-    const token = authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message:
+          'Not authorized — add header: Authorization: Bearer <your-jwt-token>',
+      });
+    }
     const decoded = verifyToken(token);
 
     const user = await User.findById(decoded.id);

@@ -99,4 +99,74 @@ ${resumeText}
   return parseJsonFromAI(content);
 }
 
-module.exports = { analyzeResumeWithAI, generateResumeInsights };
+function getMissingSections(sections) {
+  if (!sections) return [];
+  const labels = {
+    hasSummary: 'Professional Summary',
+    hasProjects: 'Projects',
+    hasExperience: 'Experience',
+    hasEducation: 'Education',
+    hasSkills: 'Skills',
+    hasCertifications: 'Certifications',
+  };
+  return Object.entries(labels)
+    .filter(([key]) => sections[key] === false)
+    .map(([, label]) => label);
+}
+
+async function generateCourseRecommendations(resumeDoc) {
+  const weaknesses = (resumeDoc.weaknesses || []).map((w) => `- ${w}`).join('\n');
+  const missingSections = getMissingSections(resumeDoc.sections).join(', ') || 'None';
+  const skills = [
+    ...(resumeDoc.skills?.technical || []),
+    ...(resumeDoc.skills?.soft || []),
+    ...(resumeDoc.skills?.tools || []),
+  ].join(', ');
+
+  const prompt = `
+You are a career coach for software engineers.
+
+Based on the resume profile below, recommend exactly 5 realistic online courses.
+Read the weaknesses and missing sections carefully. Tailor recommendations for software engineers.
+
+Return ONLY valid JSON in this format (no markdown):
+
+{
+  "courses": [
+    {
+      "title": "",
+      "platform": "Coursera | Udemy",
+      "reason": "",
+      "skillsCovered": []
+    }
+  ]
+}
+
+Rules:
+- platform must be either "Coursera" or "Udemy"
+- skillsCovered must be deduplicated
+- courses must address weaknesses or missing sections
+- use real-sounding course titles
+
+Weaknesses:
+${weaknesses || 'None listed'}
+
+Missing sections:
+${missingSections}
+
+Current skills:
+${skills || 'None listed'}
+
+Resume excerpt:
+${(resumeDoc.resumeText || '').slice(0, 2000)}
+`;
+
+  const content = await callHuggingFaceChat(prompt, 2048);
+  return parseJsonFromAI(content);
+}
+
+module.exports = {
+  analyzeResumeWithAI,
+  generateResumeInsights,
+  generateCourseRecommendations,
+};

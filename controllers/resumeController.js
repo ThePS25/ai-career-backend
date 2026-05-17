@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Resume = require('../models/Resume');
 const { extractTextFromPDF } = require('../services/pdfService');
 const {
@@ -56,6 +57,29 @@ exports.uploadResume = async (req, res) => {
       message,
       ...(nodeEnv === 'development' && { detail: err.response?.data }),
     });
+  }
+};
+
+exports.getMyResumes = async (req, res) => {
+  try {
+    const userId = new mongoose.Types.ObjectId(req.user._id);
+
+    const resumes = await Resume.find({ user: userId })
+      .sort({ createdAt: -1 })
+      .select('_id fileName createdAt atsScore')
+      .lean();
+
+    const data = resumes.map((resume) => ({
+      _id: resume._id,
+      fileName: resume.fileName,
+      createdAt: resume.createdAt,
+      aiAnalysis: { atsScore: resume.atsScore ?? null },
+    }));
+
+    res.json({ success: true, count: data.length, data });
+  } catch (err) {
+    console.error('Resume history error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch resumes' });
   }
 };
 

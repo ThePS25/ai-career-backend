@@ -35,6 +35,17 @@ const resumeSchema = new mongoose.Schema(
       improvedBullets: [String],
       summaryRewrite: String,
     },
+
+    courseRecommendations: {
+      courses: [
+        {
+          title: String,
+          platform: String,
+          reason: String,
+          skillsCovered: [String],
+        },
+      ],
+    },
   },
   { timestamps: true }
 );
