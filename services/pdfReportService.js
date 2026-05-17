@@ -38,6 +38,14 @@ function generateReportPdf(resume) {
     addSectionTitle(doc, 'ATS Score');
     doc.text(`${resume.atsScore ?? 'N/A'} / 100`);
 
+    addSectionTitle(doc, 'Summary');
+    const summaryText = sanitizeText(resume.improvements?.summaryRewrite);
+    if (summaryText) {
+      doc.text(summaryText, { align: 'left', lineGap: 2 });
+    } else {
+      doc.text('No professional summary available.');
+    }
+
     addSectionTitle(doc, 'Resume Sections');
     const sections = resume.sections || {};
     Object.entries(sections).forEach(([key, present]) => {
@@ -56,15 +64,12 @@ function generateReportPdf(resume) {
     addSectionTitle(doc, 'Weaknesses');
     addBulletList(doc, resume.weaknesses);
 
-    addSectionTitle(doc, 'Improvements');
-    if (resume.improvements?.summaryRewrite) {
-      doc.text('Professional Summary Rewrite:');
-      doc.text(resume.improvements.summaryRewrite);
-      doc.moveDown(0.25);
-    }
+    addSectionTitle(doc, 'Suggested Improvements');
     if (resume.improvements?.improvedBullets?.length) {
-      doc.text('Improved Bullets:');
+      doc.text('Improved achievement bullets:');
       addBulletList(doc, resume.improvements.improvedBullets);
+    } else {
+      doc.text('No bullet improvements suggested.');
     }
 
     addSectionTitle(doc, 'AI Analysis');
