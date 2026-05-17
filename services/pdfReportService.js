@@ -1,5 +1,10 @@
 const PDFDocument = require('pdfkit');
 
+function sanitizeText(value) {
+  if (value == null) return '';
+  return String(value).replace(/\0/g, '').trim();
+}
+
 function addSectionTitle(doc, title) {
   doc.moveDown(0.5);
   doc.fontSize(14).font('Helvetica-Bold').text(title);
@@ -27,7 +32,7 @@ function generateReportPdf(resume) {
     doc.fontSize(20).font('Helvetica-Bold').text('Resume Analysis Report');
     doc.moveDown(0.5);
     doc.fontSize(10).font('Helvetica');
-    doc.text(`File: ${resume.fileName || 'N/A'}`);
+    doc.text(`File: ${sanitizeText(resume.fileName) || 'N/A'}`);
     doc.text(`Generated: ${new Date().toLocaleString()}`);
 
     addSectionTitle(doc, 'ATS Score');
@@ -63,7 +68,9 @@ function generateReportPdf(resume) {
     }
 
     addSectionTitle(doc, 'AI Analysis');
-    doc.text(resume.aiAnalysis || 'No analysis available.', { align: 'left' });
+    doc.text(sanitizeText(resume.aiAnalysis) || 'No analysis available.', {
+      align: 'left',
+    });
 
     addSectionTitle(doc, 'Recommended Courses');
     const courses = resume.courseRecommendations?.courses || [];

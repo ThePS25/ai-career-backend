@@ -18,11 +18,12 @@ exports.downloadReport = async (req, res) => {
     const pdfBuffer = await generateReportPdf(resume);
 
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', pdfBuffer.length);
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="resume-report-${resume._id}.pdf"`
     );
-    res.send(pdfBuffer);
+    res.end(pdfBuffer);
   } catch (err) {
     console.error('Report download error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to generate report' });

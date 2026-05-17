@@ -1,16 +1,30 @@
 const User = require('../models/User');
 const { verifyToken } = require('../utils/jwt');
 
+function extractToken(req) {
+  const authHeader = req.headers.authorization;
+  let token = null;
+
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  } else if (authHeader?.trim()) {
+    token = authHeader.trim();
+  }
+
+  // Allow token in query for GET file downloads (browser / download managers)
+  if (!token && req.method === 'GET') {
+    const queryToken = req.query.token || req.query.access_token;
+    if (typeof queryToken === 'string' && queryToken.trim()) {
+      token = queryToken.trim();
+    }
+  }
+
+  return token;
+}
+
 async function protect(req, res, next) {
   try {
-    const authHeader = req.headers.authorization;
-
-    let token = null;
-    if (authHeader?.startsWith('Bearer ')) {
-      token = authHeader.slice(7).trim();
-    } else if (authHeader?.trim()) {
-      token = authHeader.trim();
-    }
+    const token = extractToken(req);
 
     if (!token) {
       return res.status(401).json({

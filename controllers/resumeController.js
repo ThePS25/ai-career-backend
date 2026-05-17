@@ -66,14 +66,22 @@ exports.getMyResumes = async (req, res) => {
 
     const resumes = await Resume.find({ user: userId })
       .sort({ createdAt: -1 })
-      .select('_id fileName createdAt atsScore')
+      .select(
+        '_id fileName createdAt atsScore sections skills strengths weaknesses improvements courseRecommendations'
+      )
       .lean();
 
     const data = resumes.map((resume) => ({
       _id: resume._id,
       fileName: resume.fileName,
       createdAt: resume.createdAt,
-      aiAnalysis: { atsScore: resume.atsScore ?? null },
+      atsScore: resume.atsScore ?? null,
+      sections: resume.sections ?? null,
+      skills: resume.skills ?? null,
+      strengths: resume.strengths ?? [],
+      weaknesses: resume.weaknesses ?? [],
+      improvements: resume.improvements ?? null,
+      courseRecommendations: resume.courseRecommendations?.courses ?? [],
     }));
 
     res.json({ success: true, count: data.length, data });
