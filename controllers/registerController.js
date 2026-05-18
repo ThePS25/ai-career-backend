@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const { generateToken } = require('../utils/jwt');
+const { formatAuthUser } = require('../utils/authResponse');
 
 async function register(req, res, next) {
   try {
@@ -21,19 +22,22 @@ async function register(req, res, next) {
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
+      const message = existingUser.googleId
+        ? 'Email already registered with Google. Please continue with Google.'
+        : 'Email already registered';
       return res.status(409).json({
         success: false,
-        message: 'Email already registered',
+        message,
       });
     }
 
-    const user = await User.create({ email, password });
+    const user = await User.create({ email, password, authProvider: 'local' });
     const token = generateToken(user._id);
 
     res.status(201).json({
       success: true,
       token,
-      user: { id: user._id, email: user.email },
+      user: formatAuthUser(user),
     });
   } catch (error) {
     if (error.code === 11000) {

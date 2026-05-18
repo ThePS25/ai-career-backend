@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const { generateToken } = require('../utils/jwt');
+const { formatAuthUser } = require('../utils/authResponse');
 
 async function login(req, res, next) {
   try {
@@ -14,7 +15,21 @@ async function login(req, res, next) {
 
     const user = await User.findOne({ email }).select('+password');
 
-    if (!user || !(await user.comparePassword(password))) {
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password',
+      });
+    }
+
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message: 'This account uses Google sign-in. Please continue with Google.',
+      });
+    }
+
+    if (!(await user.comparePassword(password))) {
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password',
@@ -26,7 +41,7 @@ async function login(req, res, next) {
     res.status(200).json({
       success: true,
       token,
-      user: { id: user._id, email: user.email },
+      user: formatAuthUser(user),
     });
   } catch (error) {
     next(error);
