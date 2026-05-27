@@ -2,8 +2,9 @@ const Resume = require('../models/Resume');
 const { ensureCourseRecommendations } = require('../services/courseService');
 const { ensureJobRecommendations } = require('../services/jobService');
 const { generateReportPdf } = require('../services/pdfReportService');
+const logger = require('../utils/logger');
 
-exports.downloadReport = async (req, res) => {
+exports.downloadReport = async (req, res, next) => {
   try {
     const resume = await Resume.findOne({
       _id: req.params.resumeId,
@@ -29,7 +30,7 @@ exports.downloadReport = async (req, res) => {
     );
     res.end(pdfBuffer);
   } catch (err) {
-    console.error('Report download error:', err.message);
-    res.status(500).json({ success: false, message: 'Failed to generate report' });
+    logger.error('Report download error', { message: err.message });
+    next(err);
   }
 };

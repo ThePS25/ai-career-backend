@@ -1,7 +1,8 @@
 const Resume = require('../models/Resume');
 const { ensureJobRecommendations, searchJobs } = require('../services/jobService');
+const logger = require('../utils/logger');
 
-exports.getJobs = async (req, res) => {
+exports.getJobs = async (req, res, next) => {
   try {
     const { query, location } = req.query;
 
@@ -14,17 +15,14 @@ exports.getJobs = async (req, res) => {
 
     const jobs = await searchJobs(query, location);
 
-    res.json(jobs);
+    res.json({ success: true, data: jobs });
   } catch (err) {
-    console.error('Job search error:', err.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to search jobs',
-    });
+    logger.error('Job search error', { message: err.message });
+    next(err);
   }
 };
 
-exports.getJobRecommendations = async (req, res) => {
+exports.getJobRecommendations = async (req, res, next) => {
   try {
     const resume = await Resume.findOne({
       _id: req.params.resumeId,
@@ -39,10 +37,7 @@ exports.getJobRecommendations = async (req, res) => {
 
     res.json({ success: true, data: jobRecommendations });
   } catch (err) {
-    console.error('Job recommendations error:', err.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to generate job recommendations',
-    });
+    logger.error('Job recommendations error', { message: err.message });
+    next(err);
   }
 };

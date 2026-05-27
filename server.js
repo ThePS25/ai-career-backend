@@ -3,63 +3,65 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
+const hpp = require('hpp');
+const xss = require('xss-clean');
 
 const { validateEnv, port, nodeEnv } = require('./config/env');
+const { corsOriginValidator } = require('./config/cors');
 const connectDB = require('./config/db');
 const routes = require('./routes');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
+const logger = require('./utils/logger');
 
 validateEnv();
 
 const app = express();
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:4173',
-  'http://127.0.0.1:4173',
-  process.env.FRONTEND_URL,
-].filter(Boolean);
+app.set('trust proxy', 1);
 
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: nodeEnv === 'production',
   })
 );
 
 app.use(
   cors({
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS blocked for origin: ${origin}`));
-      }
-    },
+    origin: corsOriginValidator,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     exposedHeaders: ['Content-Disposition'],
   })
 );
+
 app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(mongoSanitize());
+app.use(xss());
+app.use(hpp());
 
 if (nodeEnv === 'development') {
   app.use(morgan('dev'));
 } else {
-  app.use(morgan('combined'));
+  app.use(
+    morgan('combined', {
+      skip: (_req, res) => res.statusCode < 400,
+    })
+  );
 }
 
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { success: false, message: 'Too many requests, please try again later' },
-  })
-);
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: nodeEnv === 'production' ? 100 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests, please try again later' },
+});
+
+app.use(globalLimiter);
 
 app.use('/api', routes);
 
@@ -69,12 +71,13 @@ app.use(errorHandler);
 async function startServer() {
   await connectDB();
 
-  const server = app.listen(port, () => {
-    console.log(`Server running in ${nodeEnv} mode on port ${port}`);
+  const host = '0.0.0.0';
+  const server = app.listen(port, host, () => {
+    logger.info(`Server running in ${nodeEnv} mode on port ${port}`);
   });
 
   const shutdown = (signal) => {
-    console.log(`\n${signal} received. Shutting down gracefully...`);
+    logger.info(`${signal} received. Shutting down gracefully...`);
     server.close(() => {
       process.exit(0);
     });
@@ -85,7 +88,7 @@ async function startServer() {
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start server:', err.message);
+  logger.error('Failed to start server', { message: err.message });
   process.exit(1);
 });
 

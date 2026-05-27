@@ -1,5 +1,64 @@
 const axios = require('axios');
-const { hfApiKey, hfChatUrl, hfModel } = require('../config/env');
+const {
+  hfApiKey,
+  hfChatUrl,
+  hfModel,
+  hfTimeoutMs,
+  hfMaxRetries,
+} = require('../config/env');
+const logger = require('../utils/logger');
+
+const FALLBACK_ANALYSIS = `Resume analysis is temporarily unavailable. Please try again later.
+
+Suggested next steps:
+- Review formatting and section completeness
+- Add measurable achievements to experience bullets
+- Align skills with target job descriptions`;
+
+const FALLBACK_INSIGHTS = {
+  atsScore: 50,
+  sections: {
+    hasSummary: false,
+    hasProjects: false,
+    hasExperience: false,
+    hasEducation: false,
+    hasSkills: false,
+    hasCertifications: false,
+  },
+  skills: { technical: [], soft: [], tools: [] },
+  strengths: ['Resume uploaded successfully'],
+  weaknesses: ['AI analysis temporarily unavailable — try re-analyzing later'],
+  improvements: {
+    improvedBullets: [],
+    summaryRewrite: 'AI summary unavailable. Please re-analyze when the service is available.',
+  },
+};
+
+const FALLBACK_COURSES = {
+  courses: [
+    {
+      title: 'JavaScript: The Complete Guide',
+      platform: 'Udemy',
+      reason: 'Strengthen core programming fundamentals',
+      skillsCovered: ['JavaScript'],
+    },
+  ],
+};
+
+const FALLBACK_JOBS = {
+  jobs: [
+    {
+      title: 'Software Engineer',
+      jobCode: 'REQ-FALLBACK-001',
+      company: 'Various Employers',
+      location: 'Remote',
+      matchScore: 60,
+      reason: 'AI job matching temporarily unavailable',
+      requiredSkills: [],
+      source: 'ai',
+    },
+  ],
+};
 
 function parseJsonFromAI(content) {
   const trimmed = content.trim();
@@ -8,29 +67,55 @@ function parseJsonFromAI(content) {
   return JSON.parse(jsonStr);
 }
 
-async function callHuggingFaceChat(prompt, maxTokens = 1024) {
-  const response = await axios.post(
-    hfChatUrl,
-    {
-      model: hfModel,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: maxTokens,
-      temperature: 0.2,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${hfApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 120000,
-    }
-  );
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const content = response.data?.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error('AI returned an empty response');
+async function callHuggingFaceChat(prompt, maxTokens = 1024) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= hfMaxRetries; attempt += 1) {
+    try {
+      const response = await axios.post(
+        hfChatUrl,
+        {
+          model: hfModel,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: maxTokens,
+          temperature: 0.2,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${hfApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: hfTimeoutMs,
+        }
+      );
+
+      const content = response.data?.choices?.[0]?.message?.content;
+      if (!content) {
+        throw new Error('AI returned an empty response');
+      }
+      return content;
+    } catch (error) {
+      lastError = error;
+      const isRetryable =
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ETIMEDOUT' ||
+        (error.response?.status >= 500 && error.response?.status < 600);
+
+      if (attempt < hfMaxRetries && isRetryable) {
+        const delay = 1000 * (attempt + 1);
+        logger.warn(`HF API attempt ${attempt + 1} failed, retrying in ${delay}ms`);
+        await sleep(delay);
+        continue;
+      }
+      break;
+    }
   }
-  return content;
+
+  throw lastError;
 }
 
 async function analyzeResumeWithAI(resumeText) {
@@ -46,7 +131,12 @@ Analyze the resume and provide:
 Resume:
 ${resumeText}`;
 
-  return callHuggingFaceChat(prompt);
+  try {
+    return await callHuggingFaceChat(prompt);
+  } catch (error) {
+    logger.error('Resume analysis AI failed', { message: error.message });
+    return FALLBACK_ANALYSIS;
+  }
 }
 
 async function generateResumeInsights(resumeText) {
@@ -95,8 +185,13 @@ Resume:
 ${resumeText}
 `;
 
-  const content = await callHuggingFaceChat(prompt, 2048);
-  return parseJsonFromAI(content);
+  try {
+    const content = await callHuggingFaceChat(prompt, 2048);
+    return parseJsonFromAI(content);
+  } catch (error) {
+    logger.error('Resume insights AI failed', { message: error.message });
+    return { ...FALLBACK_INSIGHTS };
+  }
 }
 
 function getMissingSections(sections) {
@@ -161,8 +256,13 @@ Resume excerpt:
 ${(resumeDoc.resumeText || '').slice(0, 2000)}
 `;
 
-  const content = await callHuggingFaceChat(prompt, 2048);
-  return parseJsonFromAI(content);
+  try {
+    const content = await callHuggingFaceChat(prompt, 2048);
+    return parseJsonFromAI(content);
+  } catch (error) {
+    logger.error('Course recommendations AI failed', { message: error.message });
+    return { ...FALLBACK_COURSES };
+  }
 }
 
 async function generateJobRecommendations(resumeDoc) {
@@ -219,8 +319,13 @@ Resume excerpt:
 ${(resumeDoc.resumeText || '').slice(0, 2000)}
 `;
 
-  const content = await callHuggingFaceChat(prompt, 2048);
-  return parseJsonFromAI(content);
+  try {
+    const content = await callHuggingFaceChat(prompt, 2048);
+    return parseJsonFromAI(content);
+  } catch (error) {
+    logger.error('Job recommendations AI failed', { message: error.message });
+    return { ...FALLBACK_JOBS };
+  }
 }
 
 module.exports = {

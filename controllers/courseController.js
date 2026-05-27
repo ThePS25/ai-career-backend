@@ -1,7 +1,8 @@
 const Resume = require('../models/Resume');
 const { ensureCourseRecommendations } = require('../services/courseService');
+const logger = require('../utils/logger');
 
-exports.getCourseRecommendations = async (req, res) => {
+exports.getCourseRecommendations = async (req, res, next) => {
   try {
     const resume = await Resume.findOne({
       _id: req.params.resumeId,
@@ -16,10 +17,7 @@ exports.getCourseRecommendations = async (req, res) => {
 
     res.json({ success: true, data: courseRecommendations });
   } catch (err) {
-    console.error('Course recommendations error:', err.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to generate course recommendations',
-    });
+    logger.error('Course recommendations error', { message: err.message });
+    next(err);
   }
 };

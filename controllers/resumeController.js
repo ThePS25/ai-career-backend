@@ -7,9 +7,9 @@ const {
   generateCourseRecommendations,
 } = require('../services/aiService');
 const { buildJobRecommendations } = require('../services/jobService');
-const { nodeEnv } = require('../config/env');
+const logger = require('../utils/logger');
 
-exports.uploadResume = async (req, res) => {
+exports.uploadResume = async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -55,23 +55,12 @@ exports.uploadResume = async (req, res) => {
 
     res.json({ success: true, data: resumeDoc });
   } catch (err) {
-    console.error('Resume upload error:', err.response?.data || err.message);
-
-    const status = err.response?.status || 500;
-    const message =
-      err.response?.data?.error?.message ||
-      err.message ||
-      'Resume processing failed';
-
-    res.status(status >= 400 && status < 600 ? status : 500).json({
-      success: false,
-      message,
-      ...(nodeEnv === 'development' && { detail: err.response?.data }),
-    });
+    logger.error('Resume upload error', { message: err.message });
+    next(err);
   }
 };
 
-exports.getMyResumes = async (req, res) => {
+exports.getMyResumes = async (req, res, next) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user._id);
 
@@ -98,12 +87,12 @@ exports.getMyResumes = async (req, res) => {
 
     res.json({ success: true, count: data.length, data });
   } catch (err) {
-    console.error('Resume history error:', err.message);
-    res.status(500).json({ success: false, message: 'Failed to fetch resumes' });
+    logger.error('Resume history error', { message: err.message });
+    next(err);
   }
 };
 
-exports.reanalyzeResume = async (req, res) => {
+exports.reanalyzeResume = async (req, res, next) => {
   try {
     const resume = await Resume.findOne({
       _id: req.params.id,
@@ -136,7 +125,7 @@ exports.reanalyzeResume = async (req, res) => {
 
     res.json({ success: true, data: resume });
   } catch (err) {
-    console.error('Resume reanalysis error:', err.message);
-    res.status(500).json({ success: false, message: 'Reanalysis failed' });
+    logger.error('Resume reanalysis error', { message: err.message });
+    next(err);
   }
 };

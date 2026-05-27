@@ -2,8 +2,10 @@ const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const { generateToken } = require('../utils/jwt');
 const { formatAuthUser } = require('../utils/authResponse');
+const { googleClientId } = require('../config/env');
+const logger = require('../utils/logger');
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const googleClient = new OAuth2Client(googleClientId);
 
 async function googleLogin(req, res, next) {
   try {
@@ -16,16 +18,9 @@ async function googleLogin(req, res, next) {
       });
     }
 
-    if (!process.env.GOOGLE_CLIENT_ID) {
-      return res.status(503).json({
-        success: false,
-        message: 'Google login is not configured on the server',
-      });
-    }
-
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
-      audience: process.env.GOOGLE_CLIENT_ID,
+      audience: googleClientId,
     });
 
     const payload = ticket.getPayload();
@@ -70,11 +65,10 @@ async function googleLogin(req, res, next) {
       user: formatAuthUser(user),
     });
   } catch (error) {
-    console.error('Google auth error:', error.message);
-    res.status(401).json({
-      success: false,
-      message: 'Google authentication failed',
-    });
+    logger.error('Google auth error', { message: error.message });
+    const err = new Error('Google authentication failed');
+    err.statusCode = 401;
+    next(err);
   }
 }
 

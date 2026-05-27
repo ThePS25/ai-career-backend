@@ -1,9 +1,8 @@
 const dns = require('dns');
 const mongoose = require('mongoose');
 const { mongodbUri, nodeEnv } = require('./env');
+const logger = require('../utils/logger');
 
-// Node on Windows often fails SRV lookups (querySrv ECONNREFUSED) while nslookup works.
-// Use public DNS so mongodb+srv URIs resolve reliably.
 if (mongodbUri.startsWith('mongodb+srv://')) {
   dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
 }
@@ -14,22 +13,22 @@ async function connectDB() {
       serverSelectionTimeoutMS: 10000,
     });
 
-    console.log(`MongoDB connected: ${conn.connection.host}`);
+    logger.info(`MongoDB connected: ${conn.connection.host}`);
 
     mongoose.connection.on('error', (err) => {
-      console.error('MongoDB connection error:', err.message);
+      logger.error('MongoDB connection error', { message: err.message });
     });
 
     mongoose.connection.on('disconnected', () => {
       if (nodeEnv !== 'test') {
-        console.warn('MongoDB disconnected');
+        logger.warn('MongoDB disconnected');
       }
     });
   } catch (error) {
-    console.error('MongoDB connection failed:', error.message);
+    logger.error('MongoDB connection failed', { message: error.message });
     if (error.message.includes('querySrv')) {
-      console.error(
-        'Tip: On Windows, SRV DNS can fail. Ensure internet access, or use the standard (non-srv) connection string from MongoDB Atlas.'
+      logger.warn(
+        'Tip: On Windows, SRV DNS can fail. Use the standard (non-srv) connection string from MongoDB Atlas.'
       );
     }
     process.exit(1);
