@@ -5,13 +5,16 @@ const {
   analyzeResumeWithAI,
   generateResumeInsights,
   generateCourseRecommendations,
+  resolveAiProvider,
 } = require('../services/aiService');
 const { buildJobRecommendations } = require('../services/jobService');
 const logger = require('../utils/logger');
 const { isAiOverloadError, sendBusyResponse } = require('../utils/busyErrors');
+const { getRequestedAiProvider } = require('../utils/aiProvider');
 
 exports.uploadResume = async (req, res, next) => {
   try {
+    const aiProvider = resolveAiProvider(getRequestedAiProvider(req));
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -28,8 +31,8 @@ exports.uploadResume = async (req, res, next) => {
       });
     }
 
-    const aiAnalysis = await analyzeResumeWithAI(text);
-    const resumeInsights = await generateResumeInsights(text);
+    const aiAnalysis = await analyzeResumeWithAI(text, { provider: aiProvider });
+    const resumeInsights = await generateResumeInsights(text, { provider: aiProvider });
 
     const resumeDoc = await Resume.create({
       user: req.user._id,
@@ -45,8 +48,12 @@ exports.uploadResume = async (req, res, next) => {
       improvements: resumeInsights.improvements,
     });
 
-    const courseRecommendations = await generateCourseRecommendations(resumeDoc);
-    const jobRecommendations = await buildJobRecommendations(resumeDoc);
+    const courseRecommendations = await generateCourseRecommendations(resumeDoc, {
+      provider: aiProvider,
+    });
+    const jobRecommendations = await buildJobRecommendations(resumeDoc, {
+      provider: aiProvider,
+    });
 
     resumeDoc.courseRecommendations = courseRecommendations;
     resumeDoc.jobRecommendations = jobRecommendations;
@@ -96,6 +103,7 @@ exports.getMyResumes = async (req, res, next) => {
 
 exports.reanalyzeResume = async (req, res, next) => {
   try {
+    const aiProvider = resolveAiProvider(getRequestedAiProvider(req));
     const resume = await Resume.findOne({
       _id: req.params.id,
       user: req.user._id,
@@ -104,7 +112,9 @@ exports.reanalyzeResume = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Resume not found' });
     }
 
-    const insights = await generateResumeInsights(resume.resumeText);
+    const insights = await generateResumeInsights(resume.resumeText, {
+      provider: aiProvider,
+    });
 
     resume.atsScore = insights.atsScore;
     resume.sections = insights.sections;
@@ -116,8 +126,12 @@ exports.reanalyzeResume = async (req, res, next) => {
     resume.jobRecommendations = undefined;
     await resume.save();
 
-    resume.courseRecommendations = await generateCourseRecommendations(resume);
-    resume.jobRecommendations = await buildJobRecommendations(resume);
+    resume.courseRecommendations = await generateCourseRecommendations(resume, {
+      provider: aiProvider,
+    });
+    resume.jobRecommendations = await buildJobRecommendations(resume, {
+      provider: aiProvider,
+    });
     await resume.save();
 
     res.json({ success: true, data: resume });

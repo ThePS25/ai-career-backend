@@ -74,11 +74,11 @@ async function fetchLiveJobsForRoles(resume, roleTitles) {
   return jobs;
 }
 
-async function buildJobRecommendations(resume) {
+async function buildJobRecommendations(resume, options = {}) {
   let aiPayload = { jobs: [] };
 
   try {
-    aiPayload = await generateJobRecommendations(resume);
+    aiPayload = await generateJobRecommendations(resume, options);
   } catch (err) {
     console.warn('AI role suggestions failed:', err.message);
   }
@@ -107,12 +107,12 @@ async function buildJobRecommendations(resume) {
   throw new Error('Unable to generate job recommendations');
 }
 
-async function ensureJobRecommendations(resume) {
+async function ensureJobRecommendations(resume, options = {}) {
   if (hasCachedJobs(resume)) {
     return resume.jobRecommendations;
   }
 
-  const recommendations = await buildJobRecommendations(resume);
+  const recommendations = await buildJobRecommendations(resume, options);
   resume.jobRecommendations = recommendations;
   await resume.save();
   return resume.jobRecommendations;

@@ -1,9 +1,12 @@
 const Resume = require('../models/Resume');
 const { ensureJobRecommendations, searchJobs } = require('../services/jobService');
+const { resolveAiProvider } = require('../services/aiService');
 const logger = require('../utils/logger');
+const { getRequestedAiProvider } = require('../utils/aiProvider');
 
 exports.getJobs = async (req, res, next) => {
   try {
+    const aiProvider = resolveAiProvider(getRequestedAiProvider(req));
     const { query, location } = req.query;
 
     if (!query || typeof query !== 'string') {
@@ -33,7 +36,9 @@ exports.getJobRecommendations = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Resume not found' });
     }
 
-    const jobRecommendations = await ensureJobRecommendations(resume);
+    const jobRecommendations = await ensureJobRecommendations(resume, {
+      provider: aiProvider,
+    });
 
     res.json({ success: true, data: jobRecommendations });
   } catch (err) {

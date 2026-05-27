@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getAvailableProviders, resolveAiProvider } = require('../services/aiService');
 
 function getHealth(_req, res) {
   const dbState = mongoose.connection.readyState;
@@ -18,4 +19,20 @@ function getHealth(_req, res) {
   });
 }
 
-module.exports = { getHealth };
+function getAiStatus(req, res) {
+  const availableProviders = getAvailableProviders();
+  const activeProvider = availableProviders.length
+    ? resolveAiProvider(req.query.provider)
+    : null;
+
+  res.status(200).json({
+    success: true,
+    data: {
+      availableProviders,
+      activeProvider,
+      canSwitch: availableProviders.length > 1,
+    },
+  });
+}
+
+module.exports = { getHealth, getAiStatus };

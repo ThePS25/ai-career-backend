@@ -5,7 +5,6 @@ const requiredEnvVars = [
   'NODE_ENV',
   'JWT_SECRET',
   'GOOGLE_CLIENT_ID',
-  'HF_API_KEY',
   'RAPIDAPI_KEY',
   'RAPIDAPI_HOST',
 ];
@@ -37,6 +36,12 @@ function validateEnv() {
   if (Number.isNaN(port) || port < 1) {
     throw new Error('PORT must be a valid positive number');
   }
+
+  const hasHf = Boolean(process.env.HF_API_KEY?.trim());
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY?.trim());
+  if (!hasHf && !hasGemini) {
+    throw new Error('At least one AI provider key is required: HF_API_KEY or GEMINI_API_KEY');
+  }
 }
 
 const mongodbUri = resolveMongoUri();
@@ -47,6 +52,8 @@ function resolveHfModels() {
 }
 
 const hfModels = resolveHfModels();
+const geminiPrimaryModel = (process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.5-flash').trim();
+const geminiFallbackModel = (process.env.GEMINI_FALLBACK_MODEL || 'gemini-pro').trim();
 
 module.exports = {
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -69,6 +76,13 @@ module.exports = {
   hfCooldownMs: parseInt(process.env.HF_COOLDOWN_MS, 10) || 3000,
   hf429RetryBaseMs: parseInt(process.env.HF_429_RETRY_BASE_MS, 10) || 3000,
   hfSkipStartupCheck: process.env.HF_SKIP_STARTUP_CHECK === 'true',
+  geminiApiKey: process.env.GEMINI_API_KEY?.trim(),
+  geminiPrimaryModel,
+  geminiFallbackModel,
+  geminiModel: geminiPrimaryModel,
+  geminiTimeoutMs: parseInt(process.env.GEMINI_TIMEOUT_MS, 10) || 90000,
+  geminiMaxRetries: parseInt(process.env.GEMINI_MAX_RETRIES, 10) || 3,
+  defaultAiProvider: (process.env.AI_PROVIDER || 'huggingface').trim().toLowerCase(),
   rapidApi: {
     key: process.env.RAPIDAPI_KEY,
     host: process.env.RAPIDAPI_HOST,

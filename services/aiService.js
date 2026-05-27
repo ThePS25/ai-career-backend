@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const {
   hfApiKey,
   hfChatUrl,
@@ -8,6 +9,12 @@ const {
   hfCooldownMs,
   hf429RetryBaseMs,
   hfSkipStartupCheck,
+  geminiApiKey,
+  geminiPrimaryModel,
+  geminiFallbackModel,
+  geminiTimeoutMs,
+  geminiMaxRetries,
+  defaultAiProvider,
 } = require('../config/env');
 const logger = require('../utils/logger');
 
@@ -19,7 +26,12 @@ Suggested next steps:
 - Align skills with target job descriptions`;
 
 const FALLBACK_INSIGHTS = {
-  atsScore: 50,
+  atsScore: 0,
+  summary: 'AI service temporarily unavailable',
+  recommendedRoles: [],
+  skillGaps: [],
+  courseSuggestions: [],
+  interviewQuestions: [],
   sections: {
     hasSummary: false,
     hasProjects: false,
@@ -29,11 +41,11 @@ const FALLBACK_INSIGHTS = {
     hasCertifications: false,
   },
   skills: { technical: [], soft: [], tools: [] },
-  strengths: ['Resume uploaded successfully'],
-  weaknesses: ['AI analysis temporarily unavailable — try re-analyzing later'],
+  strengths: [],
+  weaknesses: ['AI service temporarily unavailable'],
   improvements: {
     improvedBullets: [],
-    summaryRewrite: 'AI summary unavailable. Please re-analyze when the service is available.',
+    summaryRewrite: 'AI service temporarily unavailable',
   },
 };
 
@@ -63,11 +75,57 @@ const FALLBACK_JOBS = {
   ],
 };
 
+const AI_PROVIDERS = {
+  HUGGINGFACE: 'huggingface',
+  GEMINI: 'gemini',
+};
+
+let aiStartupChecked = false;
+let providerRuntimeStatus = {
+  huggingface: Boolean(hfApiKey && hfModels.length > 0),
+  gemini: Boolean(geminiApiKey && geminiPrimaryModel),
+};
+
 function parseJsonFromAI(content) {
   const trimmed = content.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const jsonStr = fenced ? fenced[1].trim() : trimmed;
   return JSON.parse(jsonStr);
+}
+
+function getProviderAvailability() {
+  if (aiStartupChecked) {
+    return { ...providerRuntimeStatus };
+  }
+  return {
+    huggingface: Boolean(hfApiKey && hfModels.length > 0),
+    gemini: Boolean(geminiApiKey && geminiPrimaryModel),
+  };
+}
+
+function getAvailableProviders() {
+  const availability = getProviderAvailability();
+  return Object.entries(availability)
+    .filter(([, isAvailable]) => isAvailable)
+    .map(([provider]) => provider);
+}
+
+function resolveAiProvider(requestedProvider) {
+  const available = getAvailableProviders();
+  if (!available.length) {
+    throw new Error('No configured AI providers available');
+  }
+
+  const normalized = (requestedProvider || '').toLowerCase();
+  if (normalized && available.includes(normalized)) {
+    return normalized;
+  }
+
+  if (available.includes(defaultAiProvider)) {
+    return defaultAiProvider;
+  }
+
+  return available[0];
 }
 
 function sleep(ms) {
@@ -143,6 +201,109 @@ function getRetryDelayMs(attempt, status) {
   return 1000 * (attempt + 1);
 }
 
+const geminiClient = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
+const geminiModelChain = [geminiPrimaryModel, geminiFallbackModel];
+
+function getModel(modelName = geminiPrimaryModel) {
+  if (!geminiClient) {
+    throw new Error('GEMINI_API_KEY is not configured');
+  }
+  try {
+    return geminiClient.getGenerativeModel({ model: modelName });
+  } catch (_err) {
+    return geminiClient.getGenerativeModel({ model: geminiFallbackModel });
+  }
+}
+
+function isRetryableGeminiError(error) {
+  const status = error?.status || error?.response?.status;
+  return (
+    error?.code === 'ECONNABORTED' ||
+    error?.code === 'ETIMEDOUT' ||
+    status === 429 ||
+    (status >= 500 && status < 600)
+  );
+}
+
+function formatGeminiError(error, modelName) {
+  const status = error?.status || error?.response?.status;
+  const modelLabel = modelName || `${geminiPrimaryModel} -> ${geminiFallbackModel}`;
+  const message =
+    error?.response?.data?.error?.message ||
+    error?.response?.data?.message ||
+    error?.message ||
+    'Unknown Gemini error';
+
+  if (status === 401 || status === 403) {
+    return `Gemini auth failed for "${modelLabel}". Check GEMINI_API_KEY.`;
+  }
+  if (status === 404 || status === 400) {
+    return `Gemini model "${modelLabel}" is unavailable: ${message}`;
+  }
+  if (status === 429) {
+    return `Gemini overloaded (429) on "${modelLabel}": ${message}`;
+  }
+  return `Gemini error on "${modelLabel}": ${message}`;
+}
+
+async function callSingleGeminiModel(prompt, maxTokens, modelName) {
+  const model = getModel(modelName);
+  let lastError;
+
+  for (let attempt = 0; attempt <= geminiMaxRetries; attempt += 1) {
+    try {
+      const result = await Promise.race([
+        model.generateContent(prompt),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini request timed out')), geminiTimeoutMs)
+        ),
+      ]);
+      const text = result?.response?.text?.().trim();
+      if (!text) {
+        throw new Error('Gemini returned an empty response');
+      }
+      return text;
+    } catch (error) {
+      lastError = error;
+      if (attempt < geminiMaxRetries && isRetryableGeminiError(error)) {
+        const delay = getRetryDelayMs(attempt, error?.status || error?.response?.status);
+        logger.warn(
+          `Gemini "${modelName}" attempt ${attempt + 1} failed, retry in ${Math.round(delay / 1000)}s`
+        );
+        await sleep(delay);
+        continue;
+      }
+      break;
+    }
+  }
+
+  const wrapped = new Error(formatGeminiError(lastError, modelName));
+  wrapped.cause = lastError;
+  throw wrapped;
+}
+
+async function callGeminiWithFallback(prompt, maxTokens = 1024) {
+  let lastError;
+
+  for (const modelName of geminiModelChain) {
+    try {
+      return await callSingleGeminiModel(prompt, maxTokens, modelName);
+    } catch (error) {
+      lastError = error;
+      logger.warn(error.message);
+      if (modelName !== geminiFallbackModel) {
+        logger.warn(`Switching Gemini model from "${modelName}" to "${geminiFallbackModel}"`);
+      }
+    }
+  }
+
+  const wrapped = new Error(
+    `All Gemini models failed (${geminiPrimaryModel} -> ${geminiFallbackModel})`
+  );
+  wrapped.cause = lastError;
+  throw wrapped;
+}
+
 async function pingModel(model) {
   await axios.post(
     hfChatUrl,
@@ -161,45 +322,65 @@ async function pingModel(model) {
   );
 }
 
+async function pingGemini() {
+  if (!geminiApiKey) return false;
+  await callGeminiWithFallback('ping', 5);
+  return `${geminiPrimaryModel} -> ${geminiFallbackModel}`;
+}
+
 async function verifyHfConnection() {
   if (hfSkipStartupCheck) {
-    logger.info(`HF startup check skipped (model: ${hfModels[0]})`);
+    logger.info('AI startup check skipped');
     return true;
   }
 
-  if (!hfApiKey) {
-    logger.warn('HF_API_KEY is missing — AI features will use fallbacks');
-    return false;
+  const available = [];
+  providerRuntimeStatus = { huggingface: false, gemini: false };
+
+  if (hfApiKey) {
+    for (const model of hfModels) {
+      try {
+        await pingModel(model);
+        available.push(AI_PROVIDERS.HUGGINGFACE);
+        providerRuntimeStatus.huggingface = true;
+        logger.info(`Hugging Face OK: ${model}`);
+        break;
+      } catch (error) {
+        const status = error.response?.status;
+        const hint =
+          status === 400
+            ? ' — enable this model at https://huggingface.co/settings/inference-providers'
+            : '';
+        logger.warn(
+          `Hugging Face unavailable: ${model} (${status || error.code || 'error'})${hint}`
+        );
+      }
+    }
+  } else {
+    logger.warn('HF_API_KEY is missing');
   }
 
-  const available = [];
-
-  for (const model of hfModels) {
+  if (geminiApiKey) {
     try {
-      await pingModel(model);
-      available.push(model);
-      logger.info(`Hugging Face OK: ${model}`);
+      await pingGemini();
+      available.push(AI_PROVIDERS.GEMINI);
+      providerRuntimeStatus.gemini = true;
+      logger.info(`Gemini OK: ${geminiPrimaryModel} -> ${geminiFallbackModel}`);
     } catch (error) {
-      const status = error.response?.status;
-      const hint =
-        status === 400
-          ? ' — enable this model at https://huggingface.co/settings/inference-providers'
-          : '';
-      logger.warn(
-        `Hugging Face unavailable: ${model} (${status || error.code || 'error'})${hint}`
-      );
+      logger.warn(`Gemini unavailable: ${formatGeminiError(error)}`);
     }
+  } else {
+    logger.warn('GEMINI_API_KEY is missing');
   }
 
   if (available.length === 0) {
-    logger.info(
-      `No HF models reachable at startup. Chain: ${hfModels.join(' → ')}. ` +
-        'Uploads will retry models automatically.'
-    );
+    aiStartupChecked = true;
+    logger.warn('No AI providers reachable at startup. Uploads will use fallback responses.');
     return false;
   }
 
-  logger.info(`HF model ready: ${hfModels[0]}`);
+  aiStartupChecked = true;
+  logger.info(`AI providers ready: ${[...new Set(available)].join(', ')}`);
   return true;
 }
 
@@ -296,7 +477,19 @@ function callHuggingFaceChat(prompt, maxTokens = 1024) {
   return enqueueHfTask(() => callHuggingFaceChatUnqueued(prompt, maxTokens));
 }
 
-async function analyzeResumeWithAI(resumeText) {
+async function callGeminiChat(prompt, maxTokens = 1024) {
+  return callGeminiWithFallback(prompt, maxTokens);
+}
+
+async function callAiChat(prompt, maxTokens, provider) {
+  const resolvedProvider = resolveAiProvider(provider);
+  if (resolvedProvider === AI_PROVIDERS.GEMINI) {
+    return callGeminiChat(prompt, maxTokens);
+  }
+  return callHuggingFaceChat(prompt, maxTokens);
+}
+
+async function analyzeResumeWithAI(resumeText, options = {}) {
   const prompt = `You are an expert tech recruiter.
 
 Analyze the resume and provide:
@@ -310,14 +503,14 @@ Resume:
 ${resumeText}`;
 
   try {
-    return await callHuggingFaceChat(prompt);
+    return await callAiChat(prompt, 1024, options.provider);
   } catch (error) {
     logger.error('Resume analysis AI failed', { message: error.message });
     return FALLBACK_ANALYSIS;
   }
 }
 
-async function generateResumeInsights(resumeText) {
+async function generateResumeInsights(resumeText, options = {}) {
   const prompt = `
 You are an expert ATS system and senior tech recruiter.
 
@@ -364,7 +557,7 @@ ${resumeText}
 `;
 
   try {
-    const content = await callHuggingFaceChat(prompt, 2048);
+    const content = await callAiChat(prompt, 2048, options.provider);
     return parseJsonFromAI(content);
   } catch (error) {
     logger.error('Resume insights AI failed', { message: error.message });
@@ -387,7 +580,7 @@ function getMissingSections(sections) {
     .map(([, label]) => label);
 }
 
-async function generateCourseRecommendations(resumeDoc) {
+async function generateCourseRecommendations(resumeDoc, options = {}) {
   const weaknesses = (resumeDoc.weaknesses || []).map((w) => `- ${w}`).join('\n');
   const missingSections = getMissingSections(resumeDoc.sections).join(', ') || 'None';
   const skills = [
@@ -435,7 +628,7 @@ ${(resumeDoc.resumeText || '').slice(0, 2000)}
 `;
 
   try {
-    const content = await callHuggingFaceChat(prompt, 2048);
+    const content = await callAiChat(prompt, 2048, options.provider);
     return parseJsonFromAI(content);
   } catch (error) {
     logger.error('Course recommendations AI failed', { message: error.message });
@@ -443,7 +636,7 @@ ${(resumeDoc.resumeText || '').slice(0, 2000)}
   }
 }
 
-async function generateJobRecommendations(resumeDoc) {
+async function generateJobRecommendations(resumeDoc, options = {}) {
   const skills = [
     ...(resumeDoc.skills?.technical || []),
     ...(resumeDoc.skills?.soft || []),
@@ -498,7 +691,7 @@ ${(resumeDoc.resumeText || '').slice(0, 2000)}
 `;
 
   try {
-    const content = await callHuggingFaceChat(prompt, 2048);
+    const content = await callAiChat(prompt, 2048, options.provider);
     return parseJsonFromAI(content);
   } catch (error) {
     logger.error('Job recommendations AI failed', { message: error.message });
@@ -507,6 +700,10 @@ ${(resumeDoc.resumeText || '').slice(0, 2000)}
 }
 
 module.exports = {
+  AI_PROVIDERS,
+  resolveAiProvider,
+  getAvailableProviders,
+  getProviderAvailability,
   verifyHfConnection,
   analyzeResumeWithAI,
   generateResumeInsights,
