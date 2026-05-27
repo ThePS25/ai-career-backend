@@ -1,4 +1,9 @@
 const PDFDocument = require('pdfkit');
+const {
+  markdownToPlainText,
+  normalizeAiAnalysis,
+  parseAiAnalysisSections,
+} = require('../utils/formatAiAnalysis');
 
 function sanitizeText(value) {
   if (value == null) return '';
@@ -17,7 +22,46 @@ function addBulletList(doc, items) {
     doc.text('None');
     return;
   }
-  items.forEach((item) => doc.text(`• ${item}`));
+  items.forEach((item) => doc.text(`• ${sanitizeText(item)}`, { lineGap: 2 }));
+}
+
+function renderAiAnalysisSection(doc, aiAnalysis) {
+  const formatted = normalizeAiAnalysis(aiAnalysis);
+  const sections = parseAiAnalysisSections(formatted);
+
+  if (!sections.length) {
+    const plain = markdownToPlainText(formatted);
+    doc.text(plain || 'No analysis available.', { align: 'left', lineGap: 3 });
+    return;
+  }
+
+  sections.forEach((section, sectionIndex) => {
+    if (sectionIndex > 0) doc.moveDown(0.35);
+
+    if (section.title) {
+      doc.fontSize(12).font('Helvetica-Bold').text(section.title);
+      doc.moveDown(0.2);
+      doc.fontSize(10).font('Helvetica');
+    }
+
+    section.blocks.forEach((block) => {
+      switch (block.type) {
+        case 'subtitle':
+          doc.moveDown(0.15);
+          doc.font('Helvetica-Bold').text(block.text);
+          doc.font('Helvetica');
+          break;
+        case 'numbered':
+          doc.text(`${block.number}. ${block.text}`, { lineGap: 2, paragraphGap: 2 });
+          break;
+        case 'bullet':
+          doc.text(`• ${block.text}`, { indent: 12, lineGap: 2, paragraphGap: 2 });
+          break;
+        default:
+          doc.text(block.text, { lineGap: 2, paragraphGap: 2 });
+      }
+    });
+  });
 }
 
 function generateReportPdf(resume) {
@@ -72,10 +116,8 @@ function generateReportPdf(resume) {
       doc.text('No bullet improvements suggested.');
     }
 
-    addSectionTitle(doc, 'AI Analysis');
-    doc.text(sanitizeText(resume.aiAnalysis) || 'No analysis available.', {
-      align: 'left',
-    });
+    addSectionTitle(doc, 'Detailed AI Analysis');
+    renderAiAnalysisSection(doc, resume.aiAnalysis);
 
     addSectionTitle(doc, 'Recommended Jobs');
     const jobs = resume.jobRecommendations?.jobs || [];
@@ -83,7 +125,7 @@ function generateReportPdf(resume) {
       doc.text('No job recommendations available.');
     } else {
       jobs.forEach((job, index) => {
-        doc.font('Helvetica-Bold').text(`${index + 1}. ${job.title}`);
+        doc.font('Helvetica-Bold').text(`${index + 1}. ${sanitizeText(job.title)}`);
         doc.font('Helvetica-Bold').fillColor('#3f4bd8');
         doc.text(`Job Code: ${sanitizeText(job.jobCode) || 'N/A'}`);
         doc.text(`Company: ${sanitizeText(job.company) || 'N/A'}`);
@@ -95,7 +137,7 @@ function generateReportPdf(resume) {
         doc.text(`Location: ${job.location || 'N/A'}`);
         doc.text(`Match score: ${job.matchScore ?? 'N/A'}%`);
         doc.text(`Required skills: ${(job.requiredSkills || []).join(', ') || 'N/A'}`);
-        doc.text(`Why recommended: ${job.reason || 'N/A'}`);
+        doc.text(`Why recommended: ${sanitizeText(job.reason) || 'N/A'}`, { lineGap: 2 });
         doc.moveDown(0.5);
       });
     }
@@ -106,11 +148,11 @@ function generateReportPdf(resume) {
       doc.text('No course recommendations available.');
     } else {
       courses.forEach((course, index) => {
-        doc.font('Helvetica-Bold').text(`${index + 1}. ${course.title}`);
+        doc.font('Helvetica-Bold').text(`${index + 1}. ${sanitizeText(course.title)}`);
         doc.font('Helvetica');
         doc.text(`Platform: ${course.platform || 'N/A'}`);
         doc.text(`Skills covered: ${(course.skillsCovered || []).join(', ') || 'N/A'}`);
-        doc.text(`Why recommended: ${course.reason || 'N/A'}`);
+        doc.text(`Why recommended: ${sanitizeText(course.reason) || 'N/A'}`, { lineGap: 2 });
         doc.moveDown(0.5);
       });
     }

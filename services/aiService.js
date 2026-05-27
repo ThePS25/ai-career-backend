@@ -12,6 +12,7 @@ const {
   geminiApiKey,
   geminiPrimaryModel,
   geminiFallbackModel,
+  geminiModelChain,
   geminiTimeoutMs,
   geminiMaxRetries,
   defaultAiProvider,
@@ -202,35 +203,39 @@ function getRetryDelayMs(attempt, status) {
 }
 
 const geminiClient = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
-const geminiModelChain = [geminiPrimaryModel, geminiFallbackModel];
+const geminiChainLabel = geminiModelChain.join(' -> ');
 
-function getModel(modelName = geminiPrimaryModel) {
+function getModel(modelName) {
   if (!geminiClient) {
     throw new Error('GEMINI_API_KEY is not configured');
   }
-  try {
-    return geminiClient.getGenerativeModel({ model: modelName });
-  } catch (_err) {
-    return geminiClient.getGenerativeModel({ model: geminiFallbackModel });
-  }
+  return geminiClient.getGenerativeModel({ model: modelName });
+}
+
+function getGeminiErrorStatus(error) {
+  return error?.status || error?.cause?.status || error?.response?.status;
 }
 
 function isRetryableGeminiError(error) {
-  const status = error?.status || error?.response?.status;
+  const status = getGeminiErrorStatus(error);
+  if (status === 404 || status === 400 || status === 429) {
+    return false;
+  }
   return (
     error?.code === 'ECONNABORTED' ||
     error?.code === 'ETIMEDOUT' ||
-    status === 429 ||
     (status >= 500 && status < 600)
   );
 }
 
 function formatGeminiError(error, modelName) {
-  const status = error?.status || error?.response?.status;
-  const modelLabel = modelName || `${geminiPrimaryModel} -> ${geminiFallbackModel}`;
+  const actual = error?.cause || error;
+  const status = getGeminiErrorStatus(actual);
+  const modelLabel = modelName || geminiChainLabel;
   const message =
-    error?.response?.data?.error?.message ||
-    error?.response?.data?.message ||
+    actual?.response?.data?.error?.message ||
+    actual?.response?.data?.message ||
+    actual?.message ||
     error?.message ||
     'Unknown Gemini error';
 
@@ -241,7 +246,7 @@ function formatGeminiError(error, modelName) {
     return `Gemini model "${modelLabel}" is unavailable: ${message}`;
   }
   if (status === 429) {
-    return `Gemini overloaded (429) on "${modelLabel}": ${message}`;
+    return `Gemini quota exceeded (429) on "${modelLabel}". Try another model in GEMINI_FALLBACK_MODEL or enable billing.`;
   }
   return `Gemini error on "${modelLabel}": ${message}`;
 }
@@ -262,7 +267,7 @@ async function callSingleGeminiModel(prompt, maxTokens, modelName) {
       if (!text) {
         throw new Error('Gemini returned an empty response');
       }
-      return text;
+      return { text, modelName };
     } catch (error) {
       lastError = error;
       if (attempt < geminiMaxRetries && isRetryableGeminiError(error)) {
@@ -285,22 +290,23 @@ async function callSingleGeminiModel(prompt, maxTokens, modelName) {
 async function callGeminiWithFallback(prompt, maxTokens = 1024) {
   let lastError;
 
-  for (const modelName of geminiModelChain) {
+  for (let i = 0; i < geminiModelChain.length; i += 1) {
+    const modelName = geminiModelChain[i];
+    const nextModel = geminiModelChain[i + 1];
     try {
-      return await callSingleGeminiModel(prompt, maxTokens, modelName);
+      const { text } = await callSingleGeminiModel(prompt, maxTokens, modelName);
+      return text;
     } catch (error) {
       lastError = error;
       logger.warn(error.message);
-      if (modelName !== geminiFallbackModel) {
-        logger.warn(`Switching Gemini model from "${modelName}" to "${geminiFallbackModel}"`);
+      if (nextModel) {
+        logger.warn(`Switching Gemini model from "${modelName}" to "${nextModel}"`);
       }
     }
   }
 
-  const wrapped = new Error(
-    `All Gemini models failed (${geminiPrimaryModel} -> ${geminiFallbackModel})`
-  );
-  wrapped.cause = lastError;
+  const wrapped = new Error(`All Gemini models failed (${geminiChainLabel})`);
+  wrapped.cause = lastError?.cause || lastError;
   throw wrapped;
 }
 
@@ -324,8 +330,15 @@ async function pingModel(model) {
 
 async function pingGemini() {
   if (!geminiApiKey) return false;
-  await callGeminiWithFallback('ping', 5);
-  return `${geminiPrimaryModel} -> ${geminiFallbackModel}`;
+  for (const modelName of geminiModelChain) {
+    try {
+      await callSingleGeminiModel('ping', 5, modelName);
+      return modelName;
+    } catch (error) {
+      logger.warn(formatGeminiError(error, modelName));
+    }
+  }
+  throw new Error(`All Gemini models failed (${geminiChainLabel})`);
 }
 
 async function verifyHfConnection() {
@@ -362,12 +375,12 @@ async function verifyHfConnection() {
 
   if (geminiApiKey) {
     try {
-      await pingGemini();
+      const modelUsed = await pingGemini();
       available.push(AI_PROVIDERS.GEMINI);
       providerRuntimeStatus.gemini = true;
-      logger.info(`Gemini OK: ${geminiPrimaryModel} -> ${geminiFallbackModel}`);
+      logger.info(`Gemini OK: ${modelUsed} (chain: ${geminiChainLabel})`);
     } catch (error) {
-      logger.warn(`Gemini unavailable: ${formatGeminiError(error)}`);
+      logger.warn(`Gemini unavailable: ${error.message}`);
     }
   } else {
     logger.warn('GEMINI_API_KEY is missing');
@@ -498,6 +511,12 @@ Analyze the resume and provide:
 3. 5 Technical interview questions
 4. Career roadmap
 5. Skill gaps
+
+Formatting rules:
+- Use plain text only (no markdown symbols like ###, **, *, or code fences)
+- Use numbered section headings (e.g., "1. Resume Feedback")
+- Use simple bullet points with a dash (-) for lists
+- Keep paragraphs concise and readable in a PDF report
 
 Resume:
 ${resumeText}`;

@@ -11,6 +11,7 @@ const { buildJobRecommendations } = require('../services/jobService');
 const logger = require('../utils/logger');
 const { isAiOverloadError, sendBusyResponse } = require('../utils/busyErrors');
 const { getRequestedAiProvider } = require('../utils/aiProvider');
+const { normalizeAiAnalysis } = require('../utils/formatAiAnalysis');
 
 exports.uploadResume = async (req, res, next) => {
   try {
@@ -31,7 +32,8 @@ exports.uploadResume = async (req, res, next) => {
       });
     }
 
-    const aiAnalysis = await analyzeResumeWithAI(text, { provider: aiProvider });
+    const rawAiAnalysis = await analyzeResumeWithAI(text, { provider: aiProvider });
+    const aiAnalysis = normalizeAiAnalysis(rawAiAnalysis);
     const resumeInsights = await generateResumeInsights(text, { provider: aiProvider });
 
     const resumeDoc = await Resume.create({

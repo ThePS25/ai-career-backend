@@ -52,8 +52,37 @@ function resolveHfModels() {
 }
 
 const hfModels = resolveHfModels();
-const geminiPrimaryModel = (process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.5-flash').trim();
-const geminiFallbackModel = (process.env.GEMINI_FALLBACK_MODEL || 'gemini-pro').trim();
+
+/** Default fallback order when a model is quota-limited or unavailable */
+const DEFAULT_GEMINI_MODELS = [
+  'gemini-3.1-pro-preview',
+  'gemini-3.5-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
+];
+
+const geminiPrimaryModel = (
+  process.env.GEMINI_PRIMARY_MODEL || DEFAULT_GEMINI_MODELS[1]
+).trim();
+const geminiFallbackModel = (
+  process.env.GEMINI_FALLBACK_MODEL || DEFAULT_GEMINI_MODELS[DEFAULT_GEMINI_MODELS.length - 1]
+).trim();
+
+function buildGeminiModelChain() {
+  const extra = (process.env.GEMINI_EXTRA_MODELS || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  return [
+    ...new Set(
+      [geminiPrimaryModel, ...DEFAULT_GEMINI_MODELS, ...extra, geminiFallbackModel].filter(Boolean)
+    ),
+  ];
+}
+
+const geminiModelChain = buildGeminiModelChain();
 
 module.exports = {
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -79,6 +108,8 @@ module.exports = {
   geminiApiKey: process.env.GEMINI_API_KEY?.trim(),
   geminiPrimaryModel,
   geminiFallbackModel,
+  geminiModelChain,
+  defaultGeminiModels: DEFAULT_GEMINI_MODELS,
   geminiModel: geminiPrimaryModel,
   geminiTimeoutMs: parseInt(process.env.GEMINI_TIMEOUT_MS, 10) || 90000,
   geminiMaxRetries: parseInt(process.env.GEMINI_MAX_RETRIES, 10) || 3,
