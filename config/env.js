@@ -82,7 +82,7 @@ module.exports = {
   geminiModel: geminiPrimaryModel,
   geminiTimeoutMs: parseInt(process.env.GEMINI_TIMEOUT_MS, 10) || 90000,
   geminiMaxRetries: parseInt(process.env.GEMINI_MAX_RETRIES, 10) || 3,
-  defaultAiProvider: (process.env.AI_PROVIDER || 'huggingface').trim().toLowerCase(),
+  defaultAiProvider: (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase(),
   rapidApi: {
     key: process.env.RAPIDAPI_KEY,
     host: process.env.RAPIDAPI_HOST,
