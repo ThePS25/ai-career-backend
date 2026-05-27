@@ -41,6 +41,13 @@ function validateEnv() {
 
 const mongodbUri = resolveMongoUri();
 
+function resolveHfModels() {
+  const model = (process.env.HF_MODEL || 'google/gemma-4-31B-it').trim();
+  return [model];
+}
+
+const hfModels = resolveHfModels();
+
 module.exports = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT, 10) || 5000,
@@ -50,14 +57,18 @@ module.exports = {
     secret: process.env.JWT_SECRET,
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
-  googleClientId: process.env.GOOGLE_CLIENT_ID,
-  hfApiKey: process.env.HF_API_KEY,
+  googleClientId: process.env.GOOGLE_CLIENT_ID?.trim(),
+  hfApiKey: process.env.HF_API_KEY?.trim(),
   hfChatUrl:
     process.env.HF_CHAT_URL ||
     'https://router.huggingface.co/v1/chat/completions',
-  hfModel: process.env.HF_MODEL || 'google/gemma-4-31B-it',
+  hfModels,
+  hfModel: hfModels[0],
   hfTimeoutMs: parseInt(process.env.HF_TIMEOUT_MS, 10) || 90000,
-  hfMaxRetries: parseInt(process.env.HF_MAX_RETRIES, 10) || 2,
+  hfMaxRetries: parseInt(process.env.HF_MAX_RETRIES, 10) || 5,
+  hfCooldownMs: parseInt(process.env.HF_COOLDOWN_MS, 10) || 3000,
+  hf429RetryBaseMs: parseInt(process.env.HF_429_RETRY_BASE_MS, 10) || 3000,
+  hfSkipStartupCheck: process.env.HF_SKIP_STARTUP_CHECK === 'true',
   rapidApi: {
     key: process.env.RAPIDAPI_KEY,
     host: process.env.RAPIDAPI_HOST,

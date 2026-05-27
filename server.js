@@ -3,9 +3,9 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
 const hpp = require('hpp');
-const xss = require('xss-clean');
+const mongoSanitize = require('./middleware/mongoSanitize');
+const xssSanitize = require('./middleware/xssSanitize');
 
 const { validateEnv, port, nodeEnv } = require('./config/env');
 const { corsOriginValidator } = require('./config/cors');
@@ -13,6 +13,7 @@ const connectDB = require('./config/db');
 const routes = require('./routes');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
+const { verifyHfConnection } = require('./services/aiService');
 
 validateEnv();
 
@@ -39,8 +40,8 @@ app.use(
 
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-app.use(mongoSanitize());
-app.use(xss());
+app.use(mongoSanitize);
+app.use(xssSanitize);
 app.use(hpp());
 
 if (nodeEnv === 'development') {
@@ -70,6 +71,7 @@ app.use(errorHandler);
 
 async function startServer() {
   await connectDB();
+  await verifyHfConnection();
 
   const host = '0.0.0.0';
   const server = app.listen(port, host, () => {

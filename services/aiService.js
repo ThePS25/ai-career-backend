@@ -2,9 +2,12 @@ const axios = require('axios');
 const {
   hfApiKey,
   hfChatUrl,
-  hfModel,
+  hfModels,
   hfTimeoutMs,
   hfMaxRetries,
+  hfCooldownMs,
+  hf429RetryBaseMs,
+  hfSkipStartupCheck,
 } = require('../config/env');
 const logger = require('../utils/logger');
 
@@ -71,7 +74,136 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function callHuggingFaceChat(prompt, maxTokens = 1024) {
+// Serialize HF calls + cooldown to avoid 429 bursts during upload (4+ calls per resume)
+let hfQueue = Promise.resolve();
+
+function enqueueHfTask(task) {
+  const result = hfQueue.then(() => task());
+  hfQueue = result
+    .catch(() => {})
+    .then(() => sleep(hfCooldownMs));
+  return result;
+}
+
+function extractHfMessage(error) {
+  return (
+    error.response?.data?.error?.message ||
+    error.response?.data?.message ||
+    error.message
+  );
+}
+
+function formatHfError(error, model) {
+  const status = error.response?.status;
+  const hfMessage = extractHfMessage(error);
+  const modelLabel = model || hfModels.join(' → ');
+
+  if (status === 401) {
+    return (
+      'Hugging Face API authentication failed (401). ' +
+      'Regenerate HF_API_KEY at https://huggingface.co/settings/tokens ' +
+      'with "Inference Providers" permission, update .env, and restart the server.'
+    );
+  }
+
+  if (status === 403) {
+    return `Hugging Face access denied for model "${modelLabel}". ${hfMessage}`;
+  }
+
+  if (status === 429) {
+    return (
+      `Hugging Face router overloaded (429) for "${modelLabel}". ` +
+      `Configured models: ${hfModels.join(', ')}`
+    );
+  }
+
+  return hfMessage;
+}
+
+function shouldTryNextModel(error) {
+  const status = error.response?.status;
+  if (status === 401) return false;
+  return true;
+}
+
+function isRetryableHfError(error) {
+  const status = error.response?.status;
+  return (
+    error.code === 'ECONNABORTED' ||
+    error.code === 'ETIMEDOUT' ||
+    status === 429 ||
+    (status >= 500 && status < 600)
+  );
+}
+
+function getRetryDelayMs(attempt, status) {
+  if (status === 429) {
+    return hf429RetryBaseMs * 2 ** attempt;
+  }
+  return 1000 * (attempt + 1);
+}
+
+async function pingModel(model) {
+  await axios.post(
+    hfChatUrl,
+    {
+      model,
+      messages: [{ role: 'user', content: 'ping' }],
+      max_tokens: 5,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${hfApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 20000,
+    }
+  );
+}
+
+async function verifyHfConnection() {
+  if (hfSkipStartupCheck) {
+    logger.info(`HF startup check skipped (model: ${hfModels[0]})`);
+    return true;
+  }
+
+  if (!hfApiKey) {
+    logger.warn('HF_API_KEY is missing — AI features will use fallbacks');
+    return false;
+  }
+
+  const available = [];
+
+  for (const model of hfModels) {
+    try {
+      await pingModel(model);
+      available.push(model);
+      logger.info(`Hugging Face OK: ${model}`);
+    } catch (error) {
+      const status = error.response?.status;
+      const hint =
+        status === 400
+          ? ' — enable this model at https://huggingface.co/settings/inference-providers'
+          : '';
+      logger.warn(
+        `Hugging Face unavailable: ${model} (${status || error.code || 'error'})${hint}`
+      );
+    }
+  }
+
+  if (available.length === 0) {
+    logger.info(
+      `No HF models reachable at startup. Chain: ${hfModels.join(' → ')}. ` +
+        'Uploads will retry models automatically.'
+    );
+    return false;
+  }
+
+  logger.info(`HF model ready: ${hfModels[0]}`);
+  return true;
+}
+
+async function callModelChat(model, prompt, maxTokens) {
   let lastError;
 
   for (let attempt = 0; attempt <= hfMaxRetries; attempt += 1) {
@@ -79,7 +211,7 @@ async function callHuggingFaceChat(prompt, maxTokens = 1024) {
       const response = await axios.post(
         hfChatUrl,
         {
-          model: hfModel,
+          model,
           messages: [{ role: 'user', content: prompt }],
           max_tokens: maxTokens,
           temperature: 0.2,
@@ -100,14 +232,18 @@ async function callHuggingFaceChat(prompt, maxTokens = 1024) {
       return content;
     } catch (error) {
       lastError = error;
-      const isRetryable =
-        error.code === 'ECONNABORTED' ||
-        error.code === 'ETIMEDOUT' ||
-        (error.response?.status >= 500 && error.response?.status < 600);
+      const status = error.response?.status;
 
-      if (attempt < hfMaxRetries && isRetryable) {
-        const delay = 1000 * (attempt + 1);
-        logger.warn(`HF API attempt ${attempt + 1} failed, retrying in ${delay}ms`);
+      if (status === 401) {
+        break;
+      }
+
+      if (attempt < hfMaxRetries && isRetryableHfError(error)) {
+        const delay = getRetryDelayMs(attempt, status);
+        const logFn = status === 429 ? logger.info.bind(logger) : logger.warn.bind(logger);
+        logFn(
+          `HF "${model}" attempt ${attempt + 1} failed (${status || error.code}), retry in ${Math.round(delay / 1000)}s`
+        );
         await sleep(delay);
         continue;
       }
@@ -115,7 +251,49 @@ async function callHuggingFaceChat(prompt, maxTokens = 1024) {
     }
   }
 
-  throw lastError;
+  const wrapped = new Error(formatHfError(lastError, model));
+  wrapped.cause = lastError;
+  wrapped.model = model;
+  throw wrapped;
+}
+
+async function callHuggingFaceChatUnqueued(prompt, maxTokens = 1024) {
+  let lastError;
+
+  for (let i = 0; i < hfModels.length; i += 1) {
+    const model = hfModels[i];
+    const isFallback = i > 0;
+
+    try {
+      const content = await callModelChat(model, prompt, maxTokens);
+      if (isFallback) {
+        logger.info(`HF fallback succeeded with "${model}"`);
+      }
+      return content;
+    } catch (error) {
+      lastError = error;
+      const hasNext = i < hfModels.length - 1;
+
+      if (!hasNext || !shouldTryNextModel(error.cause || error)) {
+        break;
+      }
+
+      logger.warn(
+        `HF primary model "${model}" failed — switching to "${hfModels[i + 1]}"`
+      );
+      await sleep(500);
+    }
+  }
+
+  const wrapped = new Error(
+    `All HF models failed (${hfModels.join(' → ')}): ${lastError?.message || 'unknown error'}`
+  );
+  wrapped.cause = lastError;
+  throw wrapped;
+}
+
+function callHuggingFaceChat(prompt, maxTokens = 1024) {
+  return enqueueHfTask(() => callHuggingFaceChatUnqueued(prompt, maxTokens));
 }
 
 async function analyzeResumeWithAI(resumeText) {
@@ -329,6 +507,7 @@ ${(resumeDoc.resumeText || '').slice(0, 2000)}
 }
 
 module.exports = {
+  verifyHfConnection,
   analyzeResumeWithAI,
   generateResumeInsights,
   generateCourseRecommendations,

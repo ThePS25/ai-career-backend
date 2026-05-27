@@ -8,6 +8,7 @@ const {
 } = require('../services/aiService');
 const { buildJobRecommendations } = require('../services/jobService');
 const logger = require('../utils/logger');
+const { isAiOverloadError, sendBusyResponse } = require('../utils/busyErrors');
 
 exports.uploadResume = async (req, res, next) => {
   try {
@@ -44,10 +45,8 @@ exports.uploadResume = async (req, res, next) => {
       improvements: resumeInsights.improvements,
     });
 
-    const [courseRecommendations, jobRecommendations] = await Promise.all([
-      generateCourseRecommendations(resumeDoc),
-      buildJobRecommendations(resumeDoc),
-    ]);
+    const courseRecommendations = await generateCourseRecommendations(resumeDoc);
+    const jobRecommendations = await buildJobRecommendations(resumeDoc);
 
     resumeDoc.courseRecommendations = courseRecommendations;
     resumeDoc.jobRecommendations = jobRecommendations;
@@ -56,6 +55,9 @@ exports.uploadResume = async (req, res, next) => {
     res.json({ success: true, data: resumeDoc });
   } catch (err) {
     logger.error('Resume upload error', { message: err.message });
+    if (isAiOverloadError(err)) {
+      return sendBusyResponse(res);
+    }
     next(err);
   }
 };
@@ -114,18 +116,16 @@ exports.reanalyzeResume = async (req, res, next) => {
     resume.jobRecommendations = undefined;
     await resume.save();
 
-    const [courseRecommendations, jobRecommendations] = await Promise.all([
-      generateCourseRecommendations(resume),
-      buildJobRecommendations(resume),
-    ]);
-
-    resume.courseRecommendations = courseRecommendations;
-    resume.jobRecommendations = jobRecommendations;
+    resume.courseRecommendations = await generateCourseRecommendations(resume);
+    resume.jobRecommendations = await buildJobRecommendations(resume);
     await resume.save();
 
     res.json({ success: true, data: resume });
   } catch (err) {
     logger.error('Resume reanalysis error', { message: err.message });
+    if (isAiOverloadError(err)) {
+      return sendBusyResponse(res);
+    }
     next(err);
   }
 };
